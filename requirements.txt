@@ -5,3 +5,7 @@ langchain-groq
 pymongo
 langchain-community
 langchain-chroma
+langchain-mcp-adapters
+langgraph
+python-dotenv
+fastmcp

@@ -17,6 +17,7 @@ from langchain_core.messages import (
     SystemMessage,
 )
 from typing import List
+import re
 
 
 class RAG:
@@ -73,7 +74,14 @@ class runtimeEngine:
         retrieved_context = "\n".join(search_results)
 
         self.system_instruction = f"{retrieved_context}"
-
+        self.ran_on = None
+        self.continuity = """
+                        Proceed. You CAN run code on my machine. 
+                        If the entire task I asked for is done, say exactly 'The task is done.' 
+                        If you need some specific information (like username or password) say EXACTLY 'Please provide more information.' 
+                        If it's impossible, say 'The task is impossible.'
+                        (If I haven't provided a task, say exactly 'Let me know what you'd like to do next.') Otherwise keep going.
+                        """
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", self.system_instruction),
             ("assistant", "{history}"),
@@ -85,8 +93,17 @@ class runtimeEngine:
             prompt=self.prompt,
             verbose=False
         )
+        self.continuity_breakers = [
+            r"The task is done\.",
+            r"Please provide more information\.",
+            r"The task is impossible\.",
+            r"Let me know what you'd like to do next\."
+        ]
+        # Compile regex patterns for better performance
+        self.continuity_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.continuity_breakers]
 
     def predict(self, input):
+        self.ran_on = "legacy"
         return self.conversation.run(input=input)
     
     async def initialize(self):
@@ -101,6 +118,7 @@ class runtimeEngine:
 
     async def mcp_call(self, input_text: str, RAG: bool = False) -> str:
         try:
+            self.ran_on = "mcp"
             if not self._initialized:
                 await self.initialize()
             chat_history = self.memory.chat_memory.messages
@@ -108,16 +126,41 @@ class runtimeEngine:
             if RAG:
                 search_results = self.rag.search_runtime_docs(input_text)
                 retrieved_context = "\n".join(search_results)
-                system_msg = SystemMessage(content=f"{self.system_instruction}\n\nAdditional Context:\n{retrieved_context}")
+                system_msg = SystemMessage(content=f"You are Runtime. A linux shell environment\n\n{self.continuity}\n\n")
             else:
-                system_msg = SystemMessage(content=self.system_instruction)
-
-            # messages = [system_msg] + chat_history + [HumanMessage(content=input_text)]
-            messages = [HumanMessage(content=input_text)]
-            result = await self.agent.ainvoke({"messages": messages})
-            ai_response = result["messages"][-1]
-            self.memory.chat_memory.add_user_message(input_text)
-            self.memory.chat_memory.add_ai_message(ai_response.content)
+                system_msg = SystemMessage(content=f"You are Runtime. A linux shell environment\n\n{self.continuity}\n\n task:{input_text}")
+            ai_response = None
+            while True:
+                messages = system_msg
+                # print(messages)
+                # messages = [HumanMessage(content=input_text)]
+                result = await self.agent.ainvoke({"messages": messages})
+                request_status = result["messages"][-2].content
+                print(result)
+                print(f"\nDEBUG: Request Status: {request_status}")
+                # request_command = result["messages"][-2].content
+                # print(f"DEBUG: Request Status: {request_status}")
+                ai_response = result["messages"][-1]
+                self.memory.chat_memory.add_user_message(input_text)
+                self.memory.chat_memory.add_ai_message(ai_response.content)
+                # print(f"DEBUG: AI Response: {result}")
+                if any(pattern.search(ai_response.content) for pattern in self.continuity_patterns):
+                    print(f"\n{ai_response.content} {request_status}")
+                    break
+                else:
+                    recent_messages = self.memory.chat_memory.messages[-3:]
+                    if recent_messages:
+                        summary_parts = []
+                        for msg in recent_messages:
+                            if isinstance(msg, HumanMessage):
+                                summary_parts.append(f"User: {msg.content}")
+                            elif isinstance(msg, AIMessage):
+                                summary_parts.append(f"Assistant: {msg.content}")
+                        # Add the current AI response to the summary
+                        summary_parts.append(f"Assistant: {ai_response.content}")
+                        summary_parts.append(f"Request Status: {request_status}")
+                        input_text = "\n".join(summary_parts) + f"\n\nContinue with: {input_text}"
+                        
 
             return ai_response.content
         except Exception as e:

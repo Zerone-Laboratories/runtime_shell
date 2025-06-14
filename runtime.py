@@ -9,8 +9,13 @@ import threading
 import shutil
 import asyncio
 from core.rt_serve import runtimeEngine
+import os
+import subprocess
+import time
+import signal
+import atexit
 
-global anim, prevData, loopbackToModel, data, runtime
+global anim, prevData, loopbackToModel, data, runtime, ran_on
 prevData = ""
 loopbackToModel = ""
 anim = 1
@@ -36,14 +41,86 @@ def clear_memory():
     runtime = runtimeEngine()
     print(Back.RED + "Memory Reset !" + Back.BLACK)
 
+def mcp_server():
+    server_processes = []
+
+    def cleanup_servers():
+        for proc in server_processes:
+            if proc and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+    atexit.register(cleanup_servers)
+    mcp_dir = os.path.join(os.path.dirname(__file__), "core", "mcp")
+
+    try:
+        print("Starting MCP servers...")
+        # weather_cmd = ["uv", "run", "python", "mcp_servers/weather_server.py"]
+        # weather_proc = subprocess.Popen(
+        #     weather_cmd,
+        #     cwd=mcp_dir,
+        #     stdout=subprocess.PIPE,
+        #     stderr=subprocess.PIPE
+        # )
+        # server_processes.append(weather_proc)
+        # print("✓ Weather server starting on port 8000...")
+
+        # Start calculator server (port 8001)
+        calc_cmd = ["uv", "run", "python", "mcp_servers/command_server.py"]
+        calc_proc = subprocess.Popen(
+            calc_cmd,
+            cwd=mcp_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        server_processes.append(calc_proc)
+        print("✓ Command server starting on port 8001...")
+
+        # Give servers time to start
+        time.sleep(3)
+
+        # Check if servers are running
+        servers_running = True
+        for i, proc in enumerate(server_processes):
+            if proc.poll() is not None:
+                servers_running = False
+                server_name = "Command"
+                print(f"✗ {server_name} server failed to start")
+                # Print error output
+                _, stderr = proc.communicate()
+                if stderr:
+                    print(f"Error: {stderr.decode()}")
+
+        if servers_running:
+            print("✓ All MCP servers are running successfully!")
+            return True
+        else:
+            print("✗ Some servers failed to start")
+            cleanup_servers()
+            return False
+
+    except FileNotFoundError:
+        print("✗ UV not found. Please install UV first:")
+        print("curl -LsSf https://astral.sh/uv/install.sh | sh")
+        return False
+    except Exception as e:
+        print(f"✗ Error starting MCP servers: {e}")
+        cleanup_servers()
+        return False
+
 
 async def commGPT(data):
-    global prevData, loopbackToModel, anim, runtime
+    global prevData, loopbackToModel, anim, runtime, ran_on
     data = data.replace("clr_mem", "")
     try:
+        ran_on = "mcp"
         __commOS = await runtime.mcp_call(data)
         return __commOS
     except Exception as e:
+        ran_on = "legacy"
         # Fallback to regular prediction if online call fails
         print(f"Online call failed: {e}")
         print("Falling back to legacy mode...")
@@ -95,29 +172,33 @@ async def commGPT(data):
 
 #     os.system(f"rm {script_file_name}")
 
-# def execute_script(language, script_content):
-#     script_file_name = f"TempScript.{language.lower()}"
-#     executable_name = "temp"
+def execute_script(language, script_content):
+    global ran_on
+    if ran_on == "mcp":
+        print("Legacy style script execution is not permitted in MCP mode.")
+        return 0
+    script_file_name = f"TempScript.{language.lower()}"
+    executable_name = "temp"
 
-#     print(f"\n// Executing {language} script")
+    print(f"\n// Executing {language} script")
 
-#     with open(script_file_name, "w") as write_temp:
-#         script_lines = script_content.split("\n")[1:]
-#         if "python" in script_lines[0]:
-#             script_lines[0] = script_lines[0].replace("python", "#python")
-#         for line in script_lines:
-#             write_temp.write(line + "\n")
+    with open(script_file_name, "w") as write_temp:
+        script_lines = script_content.split("\n")[1:]
+        if "python" in script_lines[0]:
+            script_lines[0] = script_lines[0].replace("python", "#python")
+        for line in script_lines:
+            write_temp.write(line + "\n")
 
-#     if language.lower() == "c":
-#         print("Compiling Resource...")
-#         os.system(f"gcc {script_file_name} -o {executable_name}")
-#         os.system(f"./{executable_name}")
-#     else:
-#         print(Back.MAGENTA + "Initializing Python Interpreter...\n" + Back.RESET)
-#         os.system(f"python {script_file_name}")
-#         #os.system(f"./{executable_name}")
+    if language.lower() == "c":
+        print("Compiling Resource...")
+        os.system(f"gcc {script_file_name} -o {executable_name}")
+        os.system(f"./{executable_name}")
+    else:
+        print(Back.MAGENTA + "Initializing Python Interpreter...\n" + Back.RESET)
+        os.system(f"python {script_file_name}")
+        #os.system(f"./{executable_name}")
 
-#     os.system(f"rm {script_file_name}")
+    os.system(f"rm {script_file_name}")
 
 def loading_animation():
     global anim
@@ -149,12 +230,12 @@ if __name__ == "__main__":
     get_input_memory = 0
     print(
         Back.GREEN
-        + " | ♜ RunTime v2.0 | "
+        + " | ♜ RunTime v3.0 | "
         + Back.BLACK
     )
     print("\n")
     print(
-        "TriFusionAI | This is an Experimental system !, Recommended to run with 'safeMode' flag..."
+        "Zerone Laboratories Systems | Runtime Shell (RSH) | Version 3.0\n"
     )
     loading_thread = threading.Thread(target=loading_animation)
     loading_thread.start()
@@ -167,6 +248,12 @@ if __name__ == "__main__":
             inputPart = input(Back.BLUE + "[RSH]$ > ")
             if inputPart == "clr_mem":
                 clear_memory()
+            elif inputPart == "start_mcp":
+                print("Starting MCP servers...")
+                if mcp_server():
+                    print("MCP servers started successfully!")
+                else:
+                    print("Failed to start MCP servers.")
             elif inputPart == "exit":
                 anim = 1
                 time.sleep(0.5)
@@ -181,6 +268,14 @@ if __name__ == "__main__":
             if get_input == "clr_mem":
                 anim = 1
                 clear_memory()
+                continue
+            elif get_input == " start_mcp":
+                anim = 1
+                print("Starting MCP servers...")
+                if mcp_server():
+                    print("MCP servers started successfully!")
+                else:
+                    print("Failed to start MCP servers.")
                 continue
             elif get_input == "exit":
                 anim = 1
@@ -203,24 +298,18 @@ if __name__ == "__main__":
                 loopbackToModel = data
                 for char in data:
                     if char != "`":
-                        # current_line_length += 1
-                        # if current_line_length >= terminal_width:
-                        #     sys.stdout.write("\n")
-                        #     sys.stdout.flush()
-                        #     current_line_length = 0
-                        # time.sleep(0.01)
                         sys.stdout.write("\033[1m" + char)
                         sys.stdout.flush()
-                # if "```" in data:
-                #     if len(sys.argv) > 1:
-                #         if sys.argv[1] == "safeMode":
-                #             print(
-                #                 "Runtime Is running in Safemode !, Script Execution is not permitted..."
-                #             )
-                #     else:
-                #         script_data = data.replace("```", "")
-                #         script_language = script_data.split("\n")[0].lower()
-                #         # execute_script(script_language, script_data)
+                if "```" in data:
+                    if len(sys.argv) > 1:
+                        if sys.argv[1] == "safeMode":
+                            print(
+                                "Runtime Is running in Safemode !, Script Execution is not permitted..."
+                            )
+                    else:
+                        script_data = data.replace("```", "")
+                        script_language = script_data.split("\n")[0].lower()
+                        execute_script(script_language, script_data)
         except Exception as e:
             print("\nAn error occurred:", e)
             print("/!\\")
