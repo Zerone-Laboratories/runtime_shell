@@ -1,0 +1,21 @@
+from pydoc import doc
+from langchain.document_loaders import WebBaseLoader
+from langchain.embeddings import GPT4AllEmbeddings
+from langchain.vectorstores import Chroma
+import sys
+if __name__ == "__main__":
+    question = sys.argv[1]
+    loader = WebBaseLoader("https://www.google.com/search?q="+sys.argv[1].replace(" ","+"))
+    data = loader.load()
+
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=0)
+    all_splits = text_splitter.split_documents(data)
+
+    vectorstore = Chroma.from_documents(documents=all_splits, embedding=GPT4AllEmbeddings())
+
+    docs = vectorstore.similarity_search(question)
+    print("Real-Time-Data-Websearch-Input:",end="")
+    print(docs)
+    print("\n")

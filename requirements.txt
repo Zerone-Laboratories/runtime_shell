@@ -1,0 +1,7 @@
+colorama
+keyboard
+langchain
+langchain-groq
+pymongo
+langchain-community
+langchain-chroma
